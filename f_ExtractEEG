@@ -1,0 +1,92 @@
+function [data_trial, data_baseline] = f_ExtractEEG(fileName, path, ...
+    rereferences, classMarkers, fSampling, trialDuration, ...
+    baselineDuration, downsampleFactor)
+%This function extracts trials from a vhdr file
+%   Inputs:
+%       - fileName: a string containing the name of the vhdr file to be 
+%       extracted plus ".vhdr" at the end. e.g. "test.vhrdr"
+%       - path: a string containing the path where the vhdr file is saved
+%       - rereferences: a vector containing the list of electrode numbers
+%       to be used for re-referencing. It can be an empty vector or
+%       contains one or two electrode numbers.
+%       - classMarkers: a vector containing the list of markers. You should
+%       only include markers which happen at the beginning of a trial. 
+%       For instance, if S2 was used to mark the beginning of trial type I,
+%       S5 for trial type II, and S6 for trial type III, then set 
+%       classMarkers to [3,5,6].
+%       - fSampling: EEG sampling frequency
+%       - trialDuration: duration of each trial in seconds. 
+%       - baselineDuration: in case you need to extract EEG data prior to
+%       the beginning of a trial (to use as a baseline), set this parameter
+%       to the number of seconds you need to extract prior to each trial.
+%       Otherwise, set this parameter to 0.
+%       - downsampleFactor: downsampling factor.
+%   Outputs:
+%       - data_trial: a structure with n cells where n is the length of
+%       classMarkers vector. Each cell contains the data from one trial
+%       type. Each cell is a 3d matrix with the following dimensions:
+%       channels X raw EEG X trial number. The length of raw EEG is 
+%       sampling frequency* trial duration.
+%       - data_baseline: a structure similar to data_trial but it contains
+%       EEG data prior to the beginning of each trial (which can be used as
+%       a baseline) for each trial. If baselineDuration is set to 0, then
+%       this output will be empty.
+EEG = pop_loadbv(path,fileName); 
+% if you need to add a filtering step, this is the best place to add it.
+% Adding the filtering step after epoching may introduce artifacts. 
+% One way of filtering is to use EEGLAB FIR LP filter function:
+% EEG = pop_eegfiltnew(EEG, [], cutoff_LP, filter_order, 0, [], 0);
+rawData = EEG.data;
+numOfmarkers = size(EEG.urevent,2);
+markers = [];
+timeStamps = [];
+% Re-referencing:
+if length(rereferences)==1 %if only one electrode is used for rereferencing
+    ref = rawData(rereferences,:);
+    data_noRef = rawData([1:(rereferences-1) (rereferences+1):end],:);
+    rawData = data_noRef - repmat(ref,[(size(data_noRef,1)) 1]);
+end
+if length(rereferences)==2 % if two electrodes are used for rereferencing
+    % obtaining the average of readings from the two referencing
+    % electrodes:
+    ref = (rawData(min(rereferences),:) + rawData(max(rereferences),:))./2;
+    data_noRef = rawData([1:(min(rereferences)-1) (min(rereferences)+1):...
+        (max(rereferences)-1) (max(rereferences)+1):end],:);
+    rawData = data_noRef - repmat(ref,[(size(data_noRef,1)) 1]);
+end
+for i=1:numOfmarkers %first, we go through all the markers and record the 
+    % time stamp for each marker
+    if(~strcmp(EEG.urevent(i).code,'Stimulus'))
+        continue;
+    end
+    s = textscan(EEG.urevent(i).type,'%s %d');
+    markers = [markers; cell2mat(s(2))];
+    timeStamps = [timeStamps; EEG.urevent(i).latency];
+end
+for trialTypes=1:length(classMarkers) %then, we go through each trial type 
+    idx=[];
+    for counterMarker=1:length(markers)
+        if (markers(counterMarker)== classMarkers(trialTypes))
+            idx = [idx counterMarker]; % saving the marker numbers for the 
+            %current trial type
+        end
+    end
+    timeStamps_singleType=timeStamps(idx); %obtaining the time stamps for
+    % the current trial type
+    for i=1:length(timeStamps_singleType)
+        data_temp(:,:,i) = rawData(:,timeStamps_singleType(i): ...
+            timeStamps_singleType(i)+trialDuration*fSampling);
+        if baselineDuration ~=0
+            baseline_temp(:,:,i)=rawData(:,timeStamps_singleType(i)-...
+                baselineDuration*fSampling:timeStamps_singleType(i));
+        end
+    end
+    data_trial{trialTypes}=downsample(permute(data_temp,[2 1 3]),...
+        downsampleFactor);
+    if baselineDuration ~=0
+        data_baseline{trialTypes}=downsample(permute(baseline_temp,...
+            [2 1 3]),downsampleFactor);
+    else
+        data_baseline=[];
+    end
+end
