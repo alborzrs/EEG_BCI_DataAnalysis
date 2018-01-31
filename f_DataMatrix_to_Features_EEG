@@ -1,0 +1,131 @@
+function [featureMatrix] = f_DataMatrix_to_Features_EEG(dataMatrix,...
+    isAutoregressive, AR_order,isWavelet,Wavelet_properties)
+%This function will take the input EEG data and extracts autoregressive
+%features (Yule-Walker) and wavelet transform features.
+%   Inputs:
+%       - dataMatrix: input data with the size of m*ch*t where m is the
+%       length of data (e.g. EEG) during a trial (sampling freq * length of
+%       a trial in seconds), ch is the number of channels, and t is the
+%       number of trials.
+%       - isAutoregressive: a boolean variable. If it is equal to one, then
+%       autoregressive features will be extracted. Set it to 0 if you do
+%       not need to extract autoregressive features.
+%       - AR_order: order of the autoregressive (AR) model to be extracted
+%       - isWavelet: a boolean variable. If it is equal to one, then
+%       wavelet features will be extracted. Set it to 0 if you do
+%       not need to extract wavelet features.
+%       - Wavelet_properties: a structure with 3 cells:
+%       Wavelet_properties{1}=num_decom_level (see the ...
+%       f_wavelet_feature_wrapper function below)
+%       Wavelet_properties{2}=wavelet_type (see the ...
+%       f_wavelet_feature_wrapper function below)
+%       Wavelet_properties{3}=wavelet_stats (see the ...
+%       f_wavelet_feature_wrapper function below)
+%   Output:
+%       featureMatrix: a t-by-n matrix where t is the number of trials and
+%       n is the total number of features extracted by each trial. n is
+%       equal to number of EEG channels*(AR_order+
+%       (Number of decomposition levels * number of WT feature types))
+
+%Defining some parameters:
+featureMatrix=[];
+numOfChannels=size(dataMatrix,2); %number of channels
+numOfTrials=size(dataMatrix,3); %number of trials
+%=================Calculating autoregressive features=====================
+featureMatrix_AR=[];
+if isAutoregressive==1
+    featureMatrix_AR_3d = zeros(AR_order,numOfChannels, ...
+        numOfTrials);
+    for trialNum=1:numOfTrials
+        for electrode=1:numOfChannels
+            trial = dataMatrix(:,electrode,trialNum);
+            [d1,~] = aryule(trial,AR_order);
+            featureMatrix_AR_3d(:, electrode, trialNum) = d1(2:end);
+        end
+    end
+    featureMatrix_AR = reshape(permute(featureMatrix_AR_3d,[3 1 2]),...
+        numOfTrials , numel(featureMatrix_AR_3d)/numOfTrials);
+end
+%=================Calculating wavelet features=====================
+featureMatrix_WT = [];
+if isWavelet==1
+    featureMatrix_WT_3d=f_wavelet_feature_wrapper(dataMatrix,Wavelet_properties{1},...
+        Wavelet_properties{2}, Wavelet_properties{3});
+    featureMatrix_WT = reshape(permute(featureMatrix_WT_3d,[3 1 2]),...
+        numOfTrials , numel(featureMatrix_WT_3d)/numOfTrials);
+end
+featureMatrix=cat(2, featureMatrix_AR, featureMatrix_WT);
+
+function [WT_wrap] = f_wavelet_feature_wrapper (dataMatrix,...
+    num_decom_level, wavelet_type, wavelet_stats)
+%This function will take the data and generate the wavelet transform
+%detailed features (variance, std, mean, energy)
+%   Inputs:
+%       - dataMatrix: input data with the size of m*ch*t where m is the
+%       length of data (e.g. EEG) during a trial (sampling freq * length of
+%       a trial in seconds), ch is the number of channels, and t is the
+%       number of trials.
+%       - num_decom_level: number of decomposition levels
+%       - wavelet_type: a string representing the wavelet transform type.
+%       Some of the most common WT types for EEG analysis are:
+%       'db4','db5','db8','coif1','sym10','bior1.1'
+%       - wavelet_stats: a 1*4 binary vector:[isVar,isSTD,isRMS,isEnergy]
+%       where each of these parameters determines if that particular WT
+%       feature should be included in the output matrix or not. For
+%       instance if wavelet_stats=[1,0,1,0], then standard deviation and
+%       energey features will be extracted and returned in the output.
+%   Output:
+%       - WT_wrap: a 3d matrix with the size of n*ch*t where ch and t are
+%       the same dimensions as the input dataMatrix and n is equal to
+%       sum(wavelet_stats)*num_decom_level because each feature type
+%       (variance, rms, etc) will create num_decom_level number of WT
+%       features.
+numOfChannels = size(dataMatrix, 2);
+numOfTrials = size(dataMatrix, 3);
+WT_wrap =zeros((sum(wavelet_stats==1))*num_decom_level,numOfChannels,numOfTrials);
+varFeat=[];
+stdFeat=[];
+rmsFeat=[];
+for channel = 1:numOfChannels
+    for trial = 1:numOfTrials
+        featureVect=[];
+        %decompose the wavelenght to a level num_decom_level decomposition
+        [C,L] = wavedec(dataMatrix(:, channel, trial), num_decom_level, ...
+            wavelet_type);
+        if (wavelet_stats(1)==1 || wavelet_stats(2)==1 || ...
+                wavelet_stats(3)==1)
+            if wavelet_stats(1)==1
+                varFeat=zeros(size(1,num_decom_level));
+            end
+            if wavelet_stats(2)==1
+                stdFeat=zeros(size(1,num_decom_level));
+            end
+            if wavelet_stats(3)==1
+                rmsFeat=zeros(size(1,num_decom_level));
+            end
+            for k = 1:num_decom_level
+                D = detcoef(C,L,k); %calculating the detailed coefficients
+                %========calculating variance features=====
+                if wavelet_stats(1)==1
+                    varFeat(k) = var(D);
+                end
+                %========calculating standard deviation features=====
+                if wavelet_stats(2)==1
+                    stdFeat(k) = std(D);
+                end
+                %========calculating RMS features=====
+                if wavelet_stats(3)==1
+                    rmsFeat(k) = rms(D);
+                end
+            end
+            featureVect=cat(2,varFeat, stdFeat,rmsFeat);
+        end
+        %===============calculating energy features======================
+        if (wavelet_stats(4)==1)% percentage of energy using wenergy
+            [~,energy_detail] = wenergy(C,L);
+            featureVect = cat(2,featureVect,energy_detail);
+        end
+        WT_wrap(:, channel, trial)=featureVect; %concatinating all features
+        %together
+    end
+end
