@@ -65,6 +65,8 @@ for i=1:numOfmarkers %first, we go through all the markers and record the
 end
 for trialTypes=1:length(classMarkers) %then, we go through each trial type 
     idx=[];
+    data_temp=[];
+    baseline_temp=[];
     for counterMarker=1:length(markers)
         if (markers(counterMarker)== classMarkers(trialTypes))
             idx = [idx counterMarker]; % saving the marker numbers for the 
